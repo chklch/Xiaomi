@@ -1,5 +1,6 @@
 /**
  *  Xiaomi Door/Window Sensor
+ *  Version 1.1
  *
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
@@ -11,19 +12,13 @@
  *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
  *  for the specific language governing permissions and limitations under the License.
  *
- * Based on original DH by Eric Maycock 2015 and Rave from Lazcad
- *  change log:
- *    added DH Colours
- *  added 100% battery max
- *  fixed battery parsing problem
- *  added lastcheckin attribute and tile
- *  added extra tile to show when last opened
- *  colours to confirm to new smartthings standards
- *  added ability to force override current state to Open or Closed.
- *  added experimental health check as worked out by rolled54.Why
- *  Rinkelk - added date-attribute support for Webcore
- *  Rinkelk - Changed battery icon according to Mobile785
- *  bspranger - renamed to bspranger to remove confusion of a4refillpad
+ *  Original device handler code by a4refillpad, adapted for use with Aqara model by bspranger
+ *  Additional contributions to code by alecm, alixjg, bspranger, gn0st1c, foz333, jmagnuson, rinkek, ronvandegraaf, snalee, tmleafs, twonk, & veeceeoh 
+ * 
+ *  Known issues:
+ *  Xiaomi sensors do not seem to respond to refresh requests
+ *  Inconsistent rendering of user interface text/graphics between iOS and Android devices - This is due to SmartThings, not this device handler
+ *  Pairing Xiaomi sensors can be difficult as they were not designed to use with a SmartThings hub.
  *
  */
 metadata {
@@ -31,21 +26,20 @@ metadata {
    capability "Configuration"
    capability "Sensor"
    capability "Contact Sensor"
-   capability "Refresh"
    capability "Battery"
    capability "Health Check"
    
    attribute "lastCheckin", "String"
+   attribute "lastCheckinDate", "Date"
    attribute "lastOpened", "String"
    attribute "lastOpenedDate", "Date" 
-   attribute "lastCheckinDate", "Date"
+   attribute "batteryRuntime", "String"
 
    fingerprint endpointId: "01", profileId: "0104", deviceId: "0104", inClusters: "0000, 0003, FFFF, 0019", outClusters: "0000, 0004, 0003, 0006, 0008, 0005 0019", manufacturer: "LUMI", model: "lumi.sensor_magnet", deviceJoinName: "Xiaomi Door Sensor"
    
-   command "enrollResponse"
+   command "resetBatteryRuntime"
    command "resetClosed"
    command "resetOpen"
-   command "Refresh"
    }
     
    simulator {
@@ -59,195 +53,159 @@ metadata {
                 attributeState "open", label:'${name}', icon:"st.contact.contact.open", backgroundColor:"#e86d13"
                 attributeState "closed", label:'${name}', icon:"st.contact.contact.closed", backgroundColor:"#00a0dc"
             }
+            tileAttribute("device.lastOpened", key: "SECONDARY_CONTROL") {
+                attributeState("default", label:'Last Opened: ${currentValue}')
+            }
         }
         valueTile("battery", "device.battery", decoration: "flat", inactiveLabel: false, width: 2, height: 2) {
-            state "default", label:'${currentValue}%', unit:"",
+            state "battery", label:'${currentValue}%', unit:"%", icon:"https://raw.githubusercontent.com/bspranger/Xiaomi/master/images/XiaomiBattery.png",
             backgroundColors: [
                 [value: 10, color: "#bc2323"],
                 [value: 26, color: "#f1d801"],
                 [value: 51, color: "#44b621"] 
             ]
         }
+	valueTile("spacer", "spacer", decoration: "flat", inactiveLabel: false, width: 1, height: 1) {
+	    state "default", label:''
+        }
         valueTile("lastcheckin", "device.lastCheckin", decoration: "flat", inactiveLabel: false, width: 4, height: 1) {
-            state "default", label:'Last Checkin:\n${currentValue}'
+            state "default", label:'Last Event:\n${currentValue}'
         }
-        valueTile("lastopened", "device.lastOpened", decoration: "flat", inactiveLabel: false, width: 4, height: 1) {
-            state "default", label:'Last Open:\n${currentValue}'
-        }
-        standardTile("resetClosed", "device.resetClosed", inactiveLabel: false, decoration: "flat", width: 2, height: 1) {
+        standardTile("resetClosed", "device.resetClosed", inactiveLabel: false, decoration: "flat", width: 2, height: 2) {
             state "default", action:"resetClosed", label: "Override Close", icon:"st.contact.contact.closed"
         }
-        standardTile("resetOpen", "device.resetOpen", inactiveLabel: false, decoration: "flat", width: 2, height: 1) {
+        standardTile("resetOpen", "device.resetOpen", inactiveLabel: false, decoration: "flat", width: 2, height: 2) {
             state "default", action:"resetOpen", label: "Override Open", icon:"st.contact.contact.open"
         }
-        standardTile("refresh", "command.refresh", inactiveLabel: false, decoration: "flat", width: 2, height: 1) {
-            state "default", label:'refresh', action:"refresh.refresh", icon:"st.secondary.refresh-icon"
+        valueTile("batteryRuntime", "device.batteryRuntime", inactiveLabel: false, decoration: "flat", width: 4, height: 1) {
+            state "batteryRuntime", label:'Battery Changed:\n ${currentValue}'
         }
-
         main (["contact"])
-        details(["contact","battery","lastcheckin","lastopened","resetClosed","resetOpen","refresh"])
+	details(["contact","battery","resetClosed","resetOpen","spacer","lastcheckin", "spacer", "spacer", "batteryRuntime", "spacer"])
    }
+   preferences {
+		//Date & Time Config
+		input description: "", type: "paragraph", element: "paragraph", title: "DATE & CLOCK"    
+		input name: "dateformat", type: "enum", title: "Set Date Format\n US (MDY) - UK (DMY) - Other (YMD)", description: "Date Format", options:["US","UK","Other"]
+		input name: "clockformat", type: "bool", title: "Use 24 hour clock?"
+		//Battery Reset Config
+            	input description: "If you have installed a new battery, the toggle below will reset the Changed Battery date to help remember when it was changed.", type: "paragraph", element: "paragraph", title: "CHANGED BATTERY DATE RESET"
+		input name: "battReset", type: "bool", title: "Battery Changed?"
+		//Battery Voltage Offset
+	        input description: "Only change the settings below if you know what you're doing.", type: "paragraph", element: "paragraph", title: "ADVANCED SETTINGS"
+		input name: "voltsmax", title: "Max Volts\nA battery is at 100% at __ volts\nRange 2.8 to 3.4", type: "decimal", range: "2.8..3.4", defaultValue: 3, required: false
+		input name: "voltsmin", title: "Min Volts\nA battery is at 0% (needs replacing) at __ volts\nRange 2.0 to 2.7", type: "decimal", range: "2..2.7", defaultValue: 2.5, required: false
+    } 
 }
 
+// Parse incoming device messages to generate events
 def parse(String description) {
-    def linkText = getLinkText(device)
-    log.debug "${linkText}: Parsing '${description}'"
+    log.debug "${device.displayName}: Parsing '${description}'"
 
-    //  send event for heartbeat    
-    def now = new Date().format("yyyy MMM dd EEE h:mm:ss a", location.timeZone)
+	// Determine current time and date in the user-selected date format and clock style
+    def now = formatDate()
     def nowDate = new Date(now).getTime()
-    sendEvent(name: "lastCheckin", value: now)
-    sendEvent(name: "lastCheckinDate", value: nowDate) 
+	// Any report - button press & Battery - results in a lastCheckin event and update to Last Checkin tile
+	// However, only a non-parseable report results in lastCheckin being displayed in events log
+    sendEvent(name: "lastCheckin", value: now, displayed: false)
+    sendEvent(name: "lastCheckinDate", value: nowDate, displayed: false) 
 
     Map map = [:]
 
-    if (description?.startsWith('on/off: ')) 
-    {
+	// Send message data to appropriate parsing function based on the type of report
+    if (description?.startsWith('on/off: ')) {
         map = parseCustomMessage(description) 
-        sendEvent(name: "lastOpened", value: now)
-        sendEvent(name: "lastOpenedDate", value: nowDate) 
+        if (map.value == "open") {
+            sendEvent(name: "lastOpened", value: now, displayed: false)
+            sendEvent(name: "lastOpenedDate", value: nowDate, displayed: false)
+        }
     }
-    else if (description?.startsWith('catchall:')) 
-    {
+    else if (description?.startsWith('catchall:')) {
         map = parseCatchAllMessage(description)
     }
-    else if (description?.startsWith("read attr - raw: "))
-    {
+    else if (description?.startsWith("read attr - raw: ")) {
         map = parseReadAttrMessage(description)  
     }
-    log.debug "${linkText}: Parse returned $map"
+    log.debug "${device.displayName}: Parse returned $map"
     def results = map ? createEvent(map) : null
 
     return results;
 }
 
-private Map parseReadAttrMessage(String description) {
+private Map parseReadAttrMessage(String description) {   
+    def cluster = description.split(",").find {it.split(":")[0].trim() == "cluster"}?.split(":")[1].trim()
+    def attrId = description.split(",").find {it.split(":")[0].trim() == "attrId"}?.split(":")[1].trim()
+    def value = description.split(",").find {it.split(":")[0].trim() == "value"}?.split(":")[1].trim()
     def result = [
         name: 'Model',
         value: ''
     ]
-    def cluster
-    def attrId
-    def value
-        
-    cluster = description.split(",").find {it.split(":")[0].trim() == "cluster"}?.split(":")[1].trim()
-    attrId = description.split(",").find {it.split(":")[0].trim() == "attrId"}?.split(":")[1].trim()
-    value = description.split(",").find {it.split(":")[0].trim() == "value"}?.split(":")[1].trim()
-    //log.debug "cluster: ${cluster}, attrId: ${attrId}, value: ${value}"
     
-    if (cluster == "0000" && attrId == "0005") 
-    {
+    if (cluster == "0000" && attrId == "0005") {
         // Parsing the model
-        for (int i = 0; i < value.length(); i+=2) 
-        {
+        for (int i = 0; i < value.length(); i+=2) {
             def str = value.substring(i, i+2);
             def NextChar = (char)Integer.parseInt(str, 16);
             result.value = result.value + NextChar
         }
     }
-    //log.debug "Result: ${result}"
     return result
 }
 
+// Convert raw 4 digit integer voltage value into percentage based on minVolts/maxVolts range
 private Map getBatteryResult(rawValue) {
-    def linkText = getLinkText(device)
-    //log.debug '${linkText} Battery'
+    // raw voltage is normally supplied as a 4 digit integer that needs to be divided by 1000
+    // but in the case the final zero is dropped then divide by 100 to get actual voltage value 
+    def rawVolts = rawValue / 1000
+    def minVolts
+    def maxVolts
+
+    if(voltsmin == null || voltsmin == "")
+    	minVolts = 2.5
+    else
+   	minVolts = voltsmin
+    
+    if(voltsmax == null || voltsmax == "")
+    	maxVolts = 3.0
+    else
+	maxVolts = voltsmax  
+   
+    def pct = (rawVolts - minVolts) / (maxVolts - minVolts)
+    def roundedPct = Math.min(100, Math.round(pct * 100))
 
     def result = [
         name: 'battery',
-        value: '--',
-        unit: '%'
+        value: roundedPct,
+        unit: "%",
+        isStateChange: true,
+        descriptionText : "${device.displayName} Battery at ${roundedPct}% (${rawVolts} Volts)"
     ]
     
-    def rawVolts = rawValue / 1000
-
-    def maxBattery = state.maxBattery ?: 0
-    def minBattery = state.minBattery ?: 0
-
-    if (maxBattery == 0 || rawVolts > minBattery)
-        state.maxBattery = maxBattery = rawVolts
-        
-    if (minBattery == 0 || rawVolts < minBattery)
-        state.minBattery = minBattery = rawVolts
-    
-    def volts = (maxBattery + minBattery) / 2
-    def minVolts = 2.7
-    def maxVolts = 3.0
-    def pct = (volts - minVolts) / (maxVolts - minVolts)
-    def roundedPct = Math.round(pct * 100)
-    result.value = Math.min(100, roundedPct)
-    
-    result.descriptionText = "${device.displayName} raw battery is ${rawVolts}v, state: ${volts}v, ${minBattery}v - ${maxBattery}v"
-
+    log.debug "${device.displayName}: ${result}"
     return result
 }
 
+// Check catchall for battery voltage data to pass to getBatteryResult for conversion to percentage report
 private Map parseCatchAllMessage(String description) {
-    def linkText = getLinkText(device)
-    Map resultMap = [:]
-    def cluster = zigbee.parse(description)
-    log.debug cluster
-    if (cluster) {
-        switch(cluster.clusterId) {
-            case 0x0000:
-            	def MsgLength = cluster.data.size();
-                for (i = 0; i < (MsgLength-3); i++)
-                {
-                    if ((cluster.data.get(i) == 0x01) && (cluster.data.get(i+1) == 0x21))  // check the data ID and data type
-                    {
-                        // next two bytes are the battery voltage.
-                        resultMap = getBatteryResult((cluster.data.get(i+3)<<8) + cluster.data.get(i+2))
-                    }
-                }
-            	break
-        }
-    }
+	Map resultMap = [:]
+	def catchall = zigbee.parse(description)
+	log.debug catchall
 
-    return resultMap
+	if (catchall.clusterId == 0x0000) {
+		def MsgLength = catchall.data.size()
+		// Xiaomi CatchAll does not have identifiers, first UINT16 is Battery
+		if ((catchall.data.get(0) == 0x01 || catchall.data.get(0) == 0x02) && (catchall.data.get(1) == 0xFF)) {
+			for (int i = 4; i < (MsgLength-3); i++) {
+				if (catchall.data.get(i) == 0x21) { // check the data ID and data type
+					// next two bytes are the battery voltage
+					resultMap = getBatteryResult((catchall.data.get(i+2)<<8) + catchall.data.get(i+1))
+					break
+				}
+			}
+		}
+	}
+	return resultMap
 }
-
-
-def configure() {
-    def linkText = getLinkText(device)
-
-    String zigbeeEui = swapEndianHex(device.hub.zigbeeEui)
-    log.debug "${linkText}: ${device.deviceNetworkId}"
-    def endpointId = 1
-    log.debug "${linkText}: ${device.zigbeeId}"
-    log.debug "${linkText}: ${zigbeeEui}"
-    def configCmds = [
-        //battery reporting and heartbeat
-        // send-me-a-report 3600 43200 is min and max reporting time range
-        "zdo bind 0x${device.deviceNetworkId} 1 ${endpointId} 1 {${device.zigbeeId}} {}", "delay 200",
-        "zcl global send-me-a-report 1 0x20 0x20 3600 43200 {01}", "delay 200",
-        "send 0x${device.deviceNetworkId} 1 ${endpointId}", "delay 1500",
-
-
-        // Writes CIE attribute on end device to direct reports to the hub's EUID
-        "zcl global write 0x500 0x10 0xf0 {${zigbeeEui}}", "delay 200",
-        "send 0x${device.deviceNetworkId} 1 1", "delay 500",
-    ]
-
-    log.debug "${linkText}: configure: Write IAS CIE"
-    return configCmds
-}
-
-def enrollResponse() {
-    def linkText = getLinkText(device)
-    log.debug "${linkText}: Enrolling device into the IAS Zone"
-    [
-        // Enrolling device into the IAS Zone
-        "raw 0x500 {01 23 00 00 00}", "delay 200",
-        "send 0x${device.deviceNetworkId} 1 1"
-    ]
-}
-
-def refresh() {
-    def linkText = getLinkText(device)
-    log.debug "${linkText}: refreshing"
-    zigbee.configureReporting(0x0001, 0x0021, DataType.UINT8, 3600, 43200, 0x01)
-}
-
 
 private Map parseCustomMessage(String description) {
     def result
@@ -261,54 +219,95 @@ private Map parseCustomMessage(String description) {
 }
 
 private Map getContactResult(value) {
-    def linkText = getLinkText(device)
-    def descriptionText = "${linkText} was ${value == 'open' ? 'opened' : 'closed'}"
+    def descriptionText = "${device.displayName} was ${value == 'open' ? 'opened' : 'closed'}"
     return [
         name: 'contact',
         value: value,
+        isStateChange: true,
         descriptionText: descriptionText
     ]
 }
 
-private String swapEndianHex(String hex) {
-    reverseArray(hex.decodeHex()).encodeHex()
-}
-
-
-private byte[] reverseArray(byte[] array) {
-    int i = 0;
-    int j = array.length - 1;
-    byte tmp;
-
-    while (j > i) {
-        tmp = array[j];
-        array[j] = array[i];
-        array[i] = tmp;
-        j--;
-        i++;
-    }
-
-    return array
-}
-
 def resetClosed() {
-    sendEvent(name:"contact", value:"closed")
+    sendEvent(name: "contact", value: "closed", descriptionText: "${device.displayName} was manually reset to closed")
 } 
 
 def resetOpen() {
-    sendEvent(name:"contact", value:"open")
+	def now = formatDate()
+	def nowDate = new Date(now).getTime()
+	sendEvent(name: "lastOpened", value: now, displayed: false)
+	sendEvent(name: "lastOpenedDate", value: nowDate, displayed: false) 
+	sendEvent(name: "contact", value: "open", descriptionText: "${device.displayName} was manually reset to open")
 }
 
+//Reset the date displayed in Battery Changed tile to current date
+def resetBatteryRuntime(paired) {
+	def now = formatDate(true)
+	def newlyPaired = paired ? " for newly paired sensor" : ""
+	sendEvent(name: "batteryRuntime", value: now)
+	log.debug "${device.displayName}: Setting Battery Changed to current date${newlyPaired}"
+}
+
+// configure() runs after installed() when a sensor is paired
+def configure() {
+	log.debug "${device.displayName}: configuring"
+		state.battery = 0
+	if (!batteryRuntime) resetBatteryRuntime(true)
+	checkIntervalEvent("configured")
+	return
+}
+
+// installed() runs just after a sensor is paired using the "Add a Thing" method in the SmartThings mobile app
 def installed() {
-// Device wakes up every 1 hour, this interval allows us to miss one wakeup notification before marking offline
-    def linkText = getLinkText(device)
-    log.debug "${linkText}: Configured health checkInterval when installed()"
+	state.battery = 0
+	if (!batteryRuntime) resetBatteryRuntime(true)
+	checkIntervalEvent("installed")
+}
+
+// updated() will run twice every time user presses save in preference settings page
+def updated() {
+    checkIntervalEvent("updated");
+	if(battReset){
+		resetBatteryRuntime()
+		device.updateSetting("battReset", false)
+	}
+}
+
+private checkIntervalEvent(text) {
+    // Device wakes up every 1 hours, this interval allows us to miss one wakeup notification before marking offline
+    log.debug "${device.displayName}: Configured health checkInterval when ${text}()"
     sendEvent(name: "checkInterval", value: 2 * 60 * 60 + 2 * 60, displayed: false, data: [protocol: "zigbee", hubHardwareId: device.hub.hardwareID])
 }
 
-def updated() {
-// Device wakes up every 1 hours, this interval allows us to miss one wakeup notification before marking offline
-    def linkText = getLinkText(device)
-    log.debug "${linkText}: Configured health checkInterval when updated()"
-    sendEvent(name: "checkInterval", value: 2 * 60 * 60 + 2 * 60, displayed: false, data: [protocol: "zigbee", hubHardwareId: device.hub.hardwareID])
+def formatDate(batteryReset) {
+    def correctedTimezone = ""
+    def timeString = clockformat ? "HH:mm:ss" : "h:mm:ss aa"
+
+	// If user's hub timezone is not set, display error messages in log and events log, and set timezone to GMT to avoid errors
+    if (!(location.timeZone)) {
+        correctedTimezone = TimeZone.getTimeZone("GMT")
+        log.error "${device.displayName}: Time Zone not set, so GMT was used. Please set up your location in the SmartThings mobile app."
+        sendEvent(name: "error", value: "", descriptionText: "ERROR: Time Zone not set, so GMT was used. Please set up your location in the SmartThings mobile app.")
+    } 
+    else {
+        correctedTimezone = location.timeZone
+    }
+    if (dateformat == "US" || dateformat == "" || dateformat == null) {
+        if (batteryReset)
+            return new Date().format("MMM dd yyyy", correctedTimezone)
+        else
+            return new Date().format("EEE MMM dd yyyy ${timeString}", correctedTimezone)
+    }
+    else if (dateformat == "UK") {
+        if (batteryReset)
+            return new Date().format("dd MMM yyyy", correctedTimezone)
+        else
+            return new Date().format("EEE dd MMM yyyy ${timeString}", correctedTimezone)
+        }
+    else {
+        if (batteryReset)
+            return new Date().format("yyyy MMM dd", correctedTimezone)
+        else
+            return new Date().format("EEE yyyy MMM dd ${timeString}", correctedTimezone)
+    }
 }

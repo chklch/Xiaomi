@@ -1,5 +1,6 @@
 /**
  *  Xiaomi Motion Sensor
+ *  Version 1.1
  *
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
@@ -11,353 +12,288 @@
  *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
  *  for the specific language governing permissions and limitations under the License.
  *
- * Based on original DH by Eric Maycock 2015
- * modified 29/12/2016 a4refillpad 
- * Added fingerprinting
- * Added heartbeat/lastcheckin for monitoring
- * Added battery and refresh 
- * Motion background colours consistent with latest DH
- * Fixed max battery percentage to be 100%
- * Added Last update to main tile
- * Added last motion tile
- * Heartdeat icon plus improved localisation of date
- * removed non working tiles and changed layout and incorporated latest colours
- * added experimental health check as worked out by rolled54.Why
- *  bspranger - renamed to bspranger to remove confusion of a4refillpad
+ *  Original device handler code by a4refillpad, adapted for use with Aqara model by bspranger
+ *  Additional contributions to code by alecm, alixjg, bspranger, gn0st1c, foz333, jmagnuson, rinkek, ronvandegraaf, snalee, tmleafs, twonk, & veeceeoh 
+ * 
+ *  Known issues:
+ *  Xiaomi sensors do not seem to respond to refresh requests
+ *  Inconsistent rendering of user interface text/graphics between iOS and Android devices - This is due to SmartThings, not this device handler
+ *  Pairing Xiaomi sensors can be difficult as they were not designed to use with a SmartThings hub. See 
  *
  */
 
 metadata {
-	definition (name: "Xiaomi Motion Sensor", namespace: "bspranger", author: "bspranger") {
-		capability "Motion Sensor"
-		capability "Configuration"
-		capability "Battery"
-		capability "Sensor"
-		capability "Refresh"
+    definition (name: "Xiaomi Motion Sensor", namespace: "bspranger", author: "bspranger") {
+        capability "Motion Sensor"
+        capability "Configuration"
+        capability "Battery"
+        capability "Sensor"
         capability "Health Check" 
         
         attribute "lastCheckin", "String"
+        attribute "lastCheckinDate", "String"
         attribute "lastMotion", "String"
+        attribute "batteryRuntime", "String"	
 
-    	fingerprint profileId: "0104", deviceId: "0104", inClusters: "0000, 0003, FFFF, 0019", outClusters: "0000, 0004, 0003, 0006, 0008, 0005, 0019", manufacturer: "LUMI", model: "lumi.sensor_motion", deviceJoinName: "Xiaomi Motion"
+        fingerprint profileId: "0104", deviceId: "0104", inClusters: "0000, 0003, FFFF, 0019", outClusters: "0000, 0004, 0003, 0006, 0008, 0005, 0019", manufacturer: "LUMI", model: "lumi.sensor_motion", deviceJoinName: "Xiaomi Motion"
         
-        command "reset"
-        command "Refresh"
+        command "resetBatteryRuntime"	
+        command "stopMotion"
         
-	}
+    }
 
 	simulator {
 	}
 
-	preferences {
-		input "motionReset", "number", title: "Number of seconds after the last reported activity to report that motion is inactive (in seconds). \n\n(The device will always remain blind to motion for 60seconds following first detected motion. This value just clears the 'active' status after the number of seconds you set here but the device will still remain blind for 60seconds in normal operation.)", description: "", value:120, displayDuringSetup: false
-	}
-
-	tiles(scale: 2) {
-		multiAttributeTile(name:"motion", type: "generic", width: 6, height: 4){
-			tileAttribute ("device.motion", key: "PRIMARY_CONTROL") {
-				attributeState "active", label:'motion', icon:"st.motion.motion.active", backgroundColor:"#00a0dc"
-				attributeState "inactive", label:'no motion', icon:"st.motion.motion.inactive", backgroundColor:"#ffffff"
-			}
-            tileAttribute("device.lastCheckin", key: "SECONDARY_CONTROL") {
-    			attributeState("default", label:'Last Update: ${currentValue}',icon: "st.Health & Wellness.health9")
+    tiles(scale: 2) {
+        multiAttributeTile(name:"motion", type: "generic", width: 6, height: 4) {
+            tileAttribute ("device.motion", key: "PRIMARY_CONTROL") {
+                attributeState "active", label:'motion', icon:"st.motion.motion.active", backgroundColor:"#00a0dc"
+                attributeState "inactive", label:'no motion', icon:"st.motion.motion.inactive", backgroundColor:"#ffffff"
             }
-		}
-		valueTile("battery", "device.battery", decoration: "flat", inactiveLabel: false, width: 2, height: 2) {
-			state "battery", label:'${currentValue}% battery', unit:""
-		}
-              
-	    standardTile("refresh", "device.refresh", inactiveLabel: false, decoration: "flat", width: 2, height: 2) {
-            state "default", action:"refresh.refresh", icon:"st.secondary.refresh"
+            tileAttribute("device.lastMotion", key: "SECONDARY_CONTROL") {
+                attributeState("default", label:'Last Motion: ${currentValue}')
+            }
         }
-        standardTile("configure", "device.configure", inactiveLabel: false, width: 2, height: 2, decoration: "flat") {
-			state "configure", label:'', action:"configuration.configure", icon:"st.secondary.configure"
-	    }       
-        
-		standardTile("reset", "device.reset", inactiveLabel: false, decoration: "flat", width: 2, height: 1) {
-			state "default", action:"reset", label: "Reset Motion"
-		}
-		standardTile("icon", "device.refresh", inactiveLabel: false, decoration: "flat", width: 4, height: 1) {
-            state "default", label:'Last Motion:', icon:"st.Entertainment.entertainment15"
+        valueTile("battery", "device.battery", decoration: "flat", inactiveLabel: false, width: 2, height: 2) {
+            state "battery", label:'${currentValue}%', unit:"%", icon:"https://raw.githubusercontent.com/bspranger/Xiaomi/master/images/XiaomiBattery.png",
+            backgroundColors: [
+                [value: 10, color: "#bc2323"],
+                [value: 26, color: "#f1d801"],
+                [value: 51, color: "#44b621"]
+            ]
         }
-        valueTile("lastmotion", "device.lastMotion", decoration: "flat", inactiveLabel: false, width: 4, height: 1) {
-			state "default", label:'${currentValue}'
+       valueTile("spacer1", "spacer1", decoration: "flat", inactiveLabel: false, width: 1, height: 1) {
+	    state "default", label:''
         }
-        standardTile("refresh", "command.refresh", inactiveLabel: false) {
-			state "default", label:'refresh', action:"refresh.refresh", icon:"st.secondary.refresh-icon"
-	   }
+        valueTile("spacer2", "spacer2", decoration: "flat", inactiveLabel: false, width: 1, height: 2) {
+	    state "default", label:''
+        }
+        standardTile("reset", "device.reset", inactiveLabel: false, decoration: "flat", width: 2, height: 2) {
+            state "default", action:"stopMotion", label: "Reset Motion", icon:"st.motion.motion.active"
+        }
+        valueTile("lastcheckin", "device.lastCheckin", decoration: "flat", inactiveLabel: false, width: 4, height: 1) {
+            state "default", label:'Last Event:\n ${currentValue}'
+        }
+        valueTile("batteryRuntime", "device.batteryRuntime", inactiveLabel: false, decoration: "flat", width: 4, height: 1) {
+             state "batteryRuntime", label:'Battery Changed:\n ${currentValue}'
+        }
+        main(["motion"])
+        details(["motion", "spacer2", "battery", "reset", "spacer2", "spacer1", "lastcheckin", "spacer1", "spacer1", "batteryRuntime", "spacer1"])
+   }
 
-		main(["motion"])
-		details(["motion", "battery", "icon", "lastmotion", "reset", "refresh"])
-	}
+   preferences {
+		//Reset to No Motion Config
+		input description: "This setting only changes how long MOTION DETECTED is reported in SmartThings. The sensor hardware always remains blind to motion for 60 seconds after any activity.", type: "paragraph", element: "paragraph", title: "MOTION RESET"
+		input "motionreset", "number", title: "", description: "Enter number of seconds (default = 60)", range: "1..7200"
+		//Date & Time Config
+		input description: "", type: "paragraph", element: "paragraph", title: "DATE & CLOCK"    
+		input name: "dateformat", type: "enum", title: "Set Date Format\n US (MDY) - UK (DMY) - Other (YMD)", description: "Date Format", options:["US","UK","Other"]
+		input name: "clockformat", type: "bool", title: "Use 24 hour clock?"
+		//Battery Reset Config
+		input description: "If you have installed a new battery, the toggle below will reset the Changed Battery date to help remember when it was changed.", type: "paragraph", element: "paragraph", title: "CHANGED BATTERY DATE RESET"
+		input name: "battReset", type: "bool", title: "Battery Changed?"
+		//Battery Voltage Offset
+		input description: "Only change the settings below if you know what you're doing.", type: "paragraph", element: "paragraph", title: "ADVANCED SETTINGS"
+		input name: "voltsmax", title: "Max Volts\nA battery is at 100% at __ volts\nRange 2.8 to 3.4", type: "decimal", range: "2.8..3.4", defaultValue: 3, required: false
+		input name: "voltsmin", title: "Min Volts\nA battery is at 0% (needs replacing) at __ volts\nRange 2.0 to 2.7", type: "decimal", range: "2..2.7", defaultValue: 2.5, required: false
+  }
 }
 
+// Parse incoming device messages to generate events
 def parse(String description) {
-	def linkText = getLinkText(device)
-    log.debug "${linkText} Parsing: $description"
+	log.debug "${device.displayName} Parsing: $description"
+	
+	// Determine current time and date in the user-selected date format and clock style
+	def now = formatDate()    
+	def nowDate = new Date(now).getTime()
 
+	// Any report - motion, lux & Battery - results in a lastCheckin event and update to Last Event tile
+	// However, only a non-parseable report results in lastCheckin being displayed in events log
+	sendEvent(name: "lastCheckin", value: now, displayed: false)
+	sendEvent(name: "lastCheckinDate", value: nowDate, displayed: false)
+	
 	Map map = [:]
-	if (description?.startsWith('catchall:')) {
-		map = parseCatchAllMessage(description)
-	}
-	else if (description?.startsWith('read attr -')) {
+
+	// Send message data to appropriate parsing function based on the type of report	
+	if (description?.startsWith('read attr -')) {
 		map = parseReportAttributeMessage(description)
 	}
+	else if (description?.startsWith('catchall:')) {
+		map = parseCatchAllMessage(description)
+	}
  
-	log.debug "${linkText} Parse returned: $map"
+	log.debug "${device.displayName} Parse returned: $map"
 	def result = map ? createEvent(map) : null
-//  send event for heartbeat    
-    def now = new Date().format("yyyy MMM dd EEE h:mm:ss a", location.timeZone)
-    sendEvent(name: "lastCheckin", value: now)
-    
-    if (description?.startsWith('enroll request')) {
-    	List cmds = enrollResponse()
-        log.debug "${linkText} enroll response: ${cmds}"
-        result = cmds?.collect { new physicalgraph.device.HubAction(it) }
-    }
-
-       return result
-}
-
-private Map getBatteryResult(rawValue) {
-    def linkText = getLinkText(device)
-    //log.debug '${linkText} Battery'
-
-	//log.debug rawValue
-
-	def result = [
-		name: 'battery',
-		value: '--'
-	]
-    
-    def volts = rawValue / 1000
-    def minVolts = 2.0
-    def maxVolts = 3.04
-    def pct = (volts - minVolts) / (maxVolts - minVolts)
-    def roundedPct = Math.round(pct * 100)
-    result.value = Math.min(100, roundedPct)
-    
-	result.descriptionText = "${linkText} battery was ${result.value}%, ${volts} volts."
 
 	return result
 }
 
-private Map parseCatchAllMessage(String description) {
-    def linkText = getLinkText(device)
-    
+// Parse motion active report or model name message on reset button press
+private Map parseReportAttributeMessage(String description) {
+	def cluster = description.split(",").find {it.split(":")[0].trim() == "cluster"}?.split(":")[1].trim()
+	def attrId = description.split(",").find {it.split(":")[0].trim() == "attrId"}?.split(":")[1].trim()
+	def value = description.split(",").find {it.split(":")[0].trim() == "value"}?.split(":")[1].trim()
+ 
 	Map resultMap = [:]
-	def cluster = zigbee.parse(description)
-	log.debug cluster
-	if (shouldProcessMessage(cluster)) {
-		switch(cluster.clusterId) {
-			case 0x0000:
-            	def MsgLength = cluster.data.size();
-                for (i = 0; i < (MsgLength-3); i++)
-                {
-                    if ((cluster.data.get(i) == 0x01) && (cluster.data.get(i+1) == 0x21))  // check the data ID and data type
-                    {
-                        // next two bytes are the battery voltage.
-                        resultMap = getBatteryResult((cluster.data.get(i+3)<<8) + cluster.data.get(i+2))
-                    }
-                }
-            	break
+	def now = formatDate()
 
-			case 0x0402:
-				log.debug '${linkText}: TEMP'
-				// temp is last 2 data values. reverse to swap endian
-				String temp = cluster.data[-2..-1].reverse().collect { cluster.hex1(it) }.join()
-				def value = getTemperature(temp)
-				resultMap = getTemperatureResult(value)
-				break
+	// The sensor only sends a motion detected message so the reset to no motion is performed in code
+	if (cluster == "0406" & value == "01") {
+		log.debug "${device.displayName} detected motion"
+		def seconds = motionreset ? motionreset : 60
+		resultMap = [
+			name: 'motion',
+			value: 'active',
+			descriptionText: "${device.displayName} detected motion"
+		]
+		sendEvent(name: "lastMotion", value: now, displayed: false)
+		runIn(seconds, stopMotion)
+	} 
+	else if (cluster == "0000" && attrId == "0005") {
+		def modelName = ""
+		// Parsing the model
+		for (int i = 0; i < value.length(); i+=2) {
+			def str = value.substring(i, i+2);
+			def NextChar = (char)Integer.parseInt(str, 16);
+			modelName = modelName + NextChar
+		}
+		log.debug "${device.displayName} reported: cluster: ${cluster}, attrId: ${attrId}, model:${modelName}"
+	}
+	return resultMap
+}
+
+// Check catchall for battery voltage data to pass to getBatteryResult for conversion to percentage report
+private Map parseCatchAllMessage(String description) {
+	Map resultMap = [:]
+	def catchall = zigbee.parse(description)
+	log.debug catchall
+
+	if (catchall.clusterId == 0x0000) {
+		def MsgLength = catchall.data.size()
+		// Xiaomi CatchAll does not have identifiers, first UINT16 is Battery
+		if ((catchall.data.get(0) == 0x01 || catchall.data.get(0) == 0x02) && (catchall.data.get(1) == 0xFF)) {
+			for (int i = 4; i < (MsgLength-3); i++) {
+				if (catchall.data.get(i) == 0x21) { // check the data ID and data type
+					// next two bytes are the battery voltage
+					resultMap = getBatteryResult((catchall.data.get(i+2)<<8) + catchall.data.get(i+1))
+					break
+				}
+			}
 		}
 	}
-
 	return resultMap
 }
 
-private boolean shouldProcessMessage(cluster) {
-	// 0x0B is default response indicating message got through
-	// 0x07 is bind message
-	boolean ignoredMessage = cluster.profileId != 0x0104 ||
-	cluster.command == 0x0B ||
-	cluster.command == 0x07 ||
-	(cluster.data.size() > 0 && cluster.data.first() == 0x3e)
-	return !ignoredMessage
-}
+// Convert raw 4 digit integer voltage value into percentage based on minVolts/maxVolts range
+private Map getBatteryResult(rawValue) {
+    // raw voltage is normally supplied as a 4 digit integer that needs to be divided by 1000
+    // but in the case the final zero is dropped then divide by 100 to get actual voltage value 
+    def rawVolts = rawValue / 1000
+    def minVolts
+    def maxVolts
 
-
-def configure() {
-	def linkText = getLinkText(device)
-	String zigbeeEui = swapEndianHex(device.hub.zigbeeEui)
-	log.debug "${linkText}: ${device.deviceNetworkId}"
-    def endpointId = 1
-    log.debug "${linkText}: ${device.zigbeeId}"
-    log.debug "${linkText}: ${zigbeeEui}"
-	def configCmds = [
-			//battery reporting and heartbeat
-			"zdo bind 0x${device.deviceNetworkId} 1 ${endpointId} 1 {${device.zigbeeId}} {}", "delay 200",
-			"zcl global send-me-a-report 1 0x20 0x20 600 3600 {01}", "delay 200",
-			"send 0x${device.deviceNetworkId} 1 ${endpointId}", "delay 1500",
-
-
-			// Writes CIE attribute on end device to direct reports to the hub's EUID
-			"zcl global write 0x500 0x10 0xf0 {${zigbeeEui}}", "delay 200",
-			"send 0x${device.deviceNetworkId} 1 1", "delay 500",
-	]
-
-	log.debug "${linkText} configure: Write IAS CIE"
-	return configCmds
-}
-
-def enrollResponse() {
-    def linkText = getLinkText(device)
-    log.debug "${linkText}: Enrolling device into the IAS Zone"
-	[
-			// Enrolling device into the IAS Zone
-			"raw 0x500 {01 23 00 00 00}", "delay 200",
-			"send 0x${device.deviceNetworkId} 1 1"
-	]
-}
-
-def refresh() {
-	def linkText = getLinkText(device)
-    log.debug "${linkText}: Refreshing Battery"
-//    def endpointId = 0x01
-//	[
-//	    "st rattr 0x${device.deviceNetworkId} ${endpointId} 0x0000 0x0000", "delay 200"
-//	    "st rattr 0x${device.deviceNetworkId} ${endpointId} 0x0000", "delay 200"
-//	] //+ enrollResponse()
-
-    zigbee.configureReporting(0x0001, 0x0021, 0x20, 300, 600, 0x01)
-}
-
-private Map parseReportAttributeMessage(String description) {
-	Map descMap = (description - "read attr - ").split(",").inject([:]) { map, param ->
-		def nameAndValue = param.split(":")
-		map += [(nameAndValue[0].trim()):nameAndValue[1].trim()]
-	}
-	//log.debug "Desc Map: $descMap"
- 
-	Map resultMap = [:]
-    def now = new Date().format("yyyy MMM dd EEE h:mm:ss a", location.timeZone)
-   
-	if (descMap.cluster == "0001" && descMap.attrId == "0020") {
-		resultMap = getBatteryResult(Integer.parseInt(descMap.value, 16))
-	}
-    else if (descMap.cluster == "0406" && descMap.attrId == "0000") {
-    	def value = descMap.value.endsWith("01") ? "active" : "inactive"
-	    sendEvent(name: "lastMotion", value: now)
-        if (settings.motionReset == null || settings.motionReset == "" ) settings.motionReset = 120
-        if (value == "active") runIn(settings.motionReset, stopMotion)
-    	resultMap = getMotionResult(value)
-    } 
-    else if (descMap.cluster == "0000" && descMap.attrId == "0005") 
-    {
-        def result = [
-			name: 'Model',
-			value: ''
-		]
-        for (int i = 0; i < descMap.value.length(); i+=2) 
-        {
-            def str = descMap.value.substring(i, i+2);
-            def NextChar = (char)Integer.parseInt(str, 16);
-            result.value = result.value + NextChar
-        }
-        resultMap = result
-    }
-	return resultMap
-}
- 
-private Map parseCustomMessage(String description) {
-	Map resultMap = [:]
-	return resultMap
-}
-
-private Map parseIasMessage(String description) {
-    def linkText = getLinkText(device)
-    List parsedMsg = description.split(' ')
-    String msgCode = parsedMsg[2]
+    if (voltsmin == null || voltsmin == "")
+    	minVolts = 2.5
+    else
+   	minVolts = voltsmin
     
-    Map resultMap = [:]
-    switch(msgCode) {
-        case '0x0020': // Closed/No Motion/Dry
-        	resultMap = getMotionResult('inactive')
-            break
+    if (voltsmax == null || voltsmax == "")
+    	maxVolts = 3.0
+    else
+	maxVolts = voltsmax
+	
+    def pct = (rawVolts - minVolts) / (maxVolts - minVolts)
+    def roundedPct = Math.min(100, Math.round(pct * 100))
 
-        case '0x0021': // Open/Motion/Wet
-        	resultMap = getMotionResult('active')
-            break
+    def result = [
+        name: 'battery',
+        value: roundedPct,
+        unit: "%",
+        isStateChange: true,
+        descriptionText : "${device.displayName} Battery at ${roundedPct}% (${rawVolts} Volts)"
+    ]
 
-        case '0x0022': // Tamper Alarm
-        	log.debug '${linkText}: motion with tamper alarm'
-        	resultMap = getMotionResult('active')
-            break
-
-        case '0x0023': // Battery Alarm
-            break
-
-        case '0x0024': // Supervision Report
-        	log.debug '${linkText}: no motion with tamper alarm'
-        	resultMap = getMotionResult('inactive')
-            break
-
-        case '0x0025': // Restore Report
-            break
-
-        case '0x0026': // Trouble/Failure
-        	log.debug '${linkText}: motion with failure alarm'
-        	resultMap = getMotionResult('active')
-            break
-
-        case '0x0028': // Test Mode
-            break
-    }
-    return resultMap
+    return result
 }
 
-
-private Map getMotionResult(value) {
-	def linkText = getLinkText(device)
-    //log.debug "${linkText}: motion"
-	String descriptionText = value == 'active' ? "${linkText} detected motion" : "${linkText} motion has stopped"
-	def commands = [
-		name: 'motion',
-		value: value,
-		descriptionText: descriptionText
-	] 
-    return commands
-}
-
-private byte[] reverseArray(byte[] array) {
-    byte tmp;
-    tmp = array[1];
-    array[1] = array[0];
-    array[0] = tmp;
-    return array
-}
-
-private String swapEndianHex(String hex) {
-    reverseArray(hex.decodeHex()).encodeHex()
-}
-
+// If currently in 'active' motion detected state, stopMotion() resets to 'inactive' state and displays 'no motion'
 def stopMotion() {
-   sendEvent(name:"motion", value:"inactive")
+	if (device.currentState('motion')?.value == "active") {
+		def seconds = motionreset ? motionreset : 60
+		sendEvent(name:"motion", value:"inactive", isStateChange: true)
+		log.debug "${device.displayName} reset to no motion after ${seconds} seconds"
+	}
 }
 
-def reset() {
-	sendEvent(name:"motion", value:"inactive")
+//Reset the date displayed in Battery Changed tile to current date
+def resetBatteryRuntime(paired) {
+	def now = formatDate(true)
+	def newlyPaired = paired ? " for newly paired sensor" : ""
+	sendEvent(name: "batteryRuntime", value: now)
+	log.debug "${device.displayName}: Setting Battery Changed to current date${newlyPaired}"
 }
 
+// installed() runs just after a sensor is paired using the "Add a Thing" method in the SmartThings mobile app
 def installed() {
-// Device wakes up every 1 hour, this interval allows us to miss one wakeup notification before marking offline
-	def linkText = getLinkText(device)
-    log.debug "${linkText}: Configured health checkInterval when installed()"
-	sendEvent(name: "checkInterval", value: 2 * 60 * 60 + 2 * 60, displayed: false, data: [protocol: "zigbee", hubHardwareId: device.hub.hardwareID])
+	state.battery = 0
+	if (!batteryRuntime) resetBatteryRuntime(true)
+	checkIntervalEvent("installed")
 }
 
+// configure() runs after installed() when a sensor is paired
+def configure() {
+	log.debug "${device.displayName}: configuring"
+		state.battery = 0
+	if (!batteryRuntime) resetBatteryRuntime(true)
+	checkIntervalEvent("configured")
+	return
+}
+
+// updated() will run twice every time user presses save in preference settings page
 def updated() {
-// Device wakes up every 1 hours, this interval allows us to miss one wakeup notification before marking offline
-	def linkText = getLinkText(device)
-    log.debug "${linkText}: Configured health checkInterval when updated()"
-	sendEvent(name: "checkInterval", value: 2 * 60 * 60 + 2 * 60, displayed: false, data: [protocol: "zigbee", hubHardwareId: device.hub.hardwareID])
+		checkIntervalEvent("updated")
+		if(battReset){
+		resetBatteryRuntime()
+		device.updateSetting("battReset", false)
+	}
+}
+
+private checkIntervalEvent(text) {
+    // Device wakes up every 1 hours, this interval allows us to miss one wakeup notification before marking offline
+    log.debug "${device.displayName}: Configured health checkInterval when ${text}()"
+    sendEvent(name: "checkInterval", value: 2 * 60 * 60 + 2 * 60, displayed: false, data: [protocol: "zigbee", hubHardwareId: device.hub.hardwareID])
+}
+
+def formatDate(batteryReset) {
+    def correctedTimezone = ""
+    def timeString = clockformat ? "HH:mm:ss" : "h:mm:ss aa"
+
+	// If user's hub timezone is not set, display error messages in log and events log, and set timezone to GMT to avoid errors
+    if (!(location.timeZone)) {
+        correctedTimezone = TimeZone.getTimeZone("GMT")
+        log.error "${device.displayName}: Time Zone not set, so GMT was used. Please set up your location in the SmartThings mobile app."
+        sendEvent(name: "error", value: "", descriptionText: "ERROR: Time Zone not set, so GMT was used. Please set up your location in the SmartThings mobile app.")
+    } 
+    else {
+        correctedTimezone = location.timeZone
+    }
+    if (dateformat == "US" || dateformat == "" || dateformat == null) {
+        if (batteryReset)
+            return new Date().format("MMM dd yyyy", correctedTimezone)
+        else
+            return new Date().format("EEE MMM dd yyyy ${timeString}", correctedTimezone)
+    }
+    else if (dateformat == "UK") {
+        if (batteryReset)
+            return new Date().format("dd MMM yyyy", correctedTimezone)
+        else
+            return new Date().format("EEE dd MMM yyyy ${timeString}", correctedTimezone)
+        }
+    else {
+        if (batteryReset)
+            return new Date().format("yyyy MMM dd", correctedTimezone)
+        else
+            return new Date().format("EEE yyyy MMM dd ${timeString}", correctedTimezone)
+    }
 }
